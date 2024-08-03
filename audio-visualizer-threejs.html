@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Audio Visualizer with Three.js</title>
+    <style>
+      body {
+        margin: 0;
+        overflow: hidden;
+      }
+      #controls {
+        position: absolute;
+        bottom: 20px;
+        left: 20px;
+        background: rgba(25, 3, 122, 0.699);
+        padding: 10px;
+        border-radius: 5px;
+        color: white;
+      }
+      #fileInput {
+        margin-bottom: 10px;
+      }
+      #playBtn,
+      #volumeSlider,
+      #timeBar {
+        margin-right: 10px;
+      }
+      #volumeSlider {
+        width: 100px;
+      }
+      #timeBar {
+        width: 300px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="controls">
+      <input type="file" id="fileInput" accept=".wav,.mp3" />
+      <button id="playBtn">Play</button>
+      Volume:
+      <input
+        type="range"
+        id="volumeSlider"
+        min="0"
+        max="1"
+        step="0.1"
+        value="1"
+      />
+      <br />
+      <input type="range" id="timeBar" min="0" max="100" value="0" />
+      <span id="currentTime">0:00 / 0:00</span>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script>
+      class AudioVisualizer {
+        constructor() {
+          this.scene = new THREE.Scene();
+          this.camera = new THREE.PerspectiveCamera(
+            75,
+            window.innerWidth / window.innerHeight,
+            0.1,
+            1000
+          );
+          this.renderer = new THREE.WebGLRenderer({ antialias: true });
+          this.controls = null;
+          this.cubes = [];
+          this.particles = null;
+          this.analyser = null;
+          this.dataArray = null;
+          this.hypercube = null;
+          this.gifSprite = null;
+
+          this.NUM_FREQUENCIES = 128;
+          this.GRID_SIZE = 64;
+          this.CUBE_SIZE = 0.1;
+          this.GRID_SPACING = 0.15;
+          this.STREET_PROBABILITY = 0.2;
+          this.MAX_HEIGHT = 15;
+          this.PARTICLE_COUNT = 2000;
+
+          this.init();
+          this.setupAudioControls();
+          this.animate();
+        }
+
+        init() {
+          this.renderer.setSize(window.innerWidth, window.innerHeight);
+          document.body.appendChild(this.renderer.domElement);
+
+          this.camera.position.set(0, 10, 20);
+          this.camera.lookAt(0, 0, 0);
+
+          this.controls = new THREE.OrbitControls(
+            this.camera,
+            this.renderer.domElement
+          );
+          this.controls.enableDamping = true;
+          this.controls.dampingFactor = 0.05;
+          this.controls.screenSpacePanning = false;
+          this.controls.minDistance = 5;
+          this.controls.maxDistance = 50;
+          this.controls.maxPolarAngle = Math.PI / 2;
+
+          this.createCubes();
+          this.createLighting();
+          this.createStarfield();
+          this.createHypercube();
+          this.addGifToHypercube();
+
+          window.addEventListener("resize", () => this.onWindowResize(), false);
+        }
+
+        createCubes() {
+          const geometry = new THREE.BoxGeometry(
+            this.CUBE_SIZE,
+            this.CUBE_SIZE,
+            this.CUBE_SIZE
+          );
+
+          for (let x = 0; x < this.GRID_SIZE; x++) {
+            for (let z = 0; z < this.GRID_SIZE; z++) {
+              if (Math.random() < this.STREET_PROBABILITY) continue;
+
+              const material = new THREE.MeshPhongMaterial({ color: 0xffffff });
+              const cube = new THREE.Mesh(geometry, material);
+
+              const baseHeight = Math.random() * 5 + 0.5;
+              cube.scale.y = baseHeight;
+
+              cube.position.set(
+                (x - this.GRID_SIZE / 2) * this.GRID_SPACING,
+                (baseHeight * this.CUBE_SIZE) / 2,
+                (z - this.GRID_SIZE / 2) * this.GRID_SPACING
+              );
+
+              this.scene.add(cube);
+              this.cubes.push({ mesh: cube, baseHeight: baseHeight });
+            }
+          }
+        }
+
+        createLighting() {
+          const ambientLight = new THREE.AmbientLight(0x404040);
+          this.scene.add(ambientLight);
+
+          const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
+          directionalLight.position.set(1, 1, 1);
+          this.scene.add(directionalLight);
+        }
+
+        createStarfield() {
+          const particleGeometry = new THREE.BufferGeometry();
+          const particlePositions = new Float32Array(this.PARTICLE_COUNT * 3);
+          const particleSizes = new Float32Array(this.PARTICLE_COUNT);
+
+          for (let i = 0; i < this.PARTICLE_COUNT; i++) {
+            const i3 = i * 3;
+            particlePositions[i3] = (Math.random() - 0.5) * 20;
+            particlePositions[i3 + 1] = (Math.random() - 0.5) * 20;
+            particlePositions[i3 + 2] = (Math.random() - 0.5) * 20;
+            particleSizes[i] = Math.random() * 0.5 + 0.5;
+          }
+
+          particleGeometry.setAttribute(
+            "position",
+            new THREE.BufferAttribute(particlePositions, 3)
+          );
+          particleGeometry.setAttribute(
+            "size",
+            new THREE.BufferAttribute(particleSizes, 1)
+          );
+
+          const particleMaterial = new THREE.PointsMaterial({
+            color: 0xffffff,
+            size: 0.05,
+            map: new THREE.TextureLoader().load(
+              "https://assets.codepen.io/3685267/spark1.png"
+            ),
+            blending: THREE.AdditiveBlending,
+            depthTest: false,
+            transparent: true,
+          });
+
+          this.particles = new THREE.Points(particleGeometry, particleMaterial);
+          this.scene.add(this.particles);
+        }
+
+        createHypercube() {
+          const vertices = [
+            -1, -1, -1, 1, -1, -1, 1, 1, -1, -1, 1, -1, -1, -1, 1, 1, -1, 1, 1,
+            1, 1, -1, 1, 1,
+          ];
+
+          const edges = [
+            0, 1, 1, 2, 2, 3, 3, 0, 4, 5, 5, 6, 6, 7, 7, 4, 0, 4, 1, 5, 2, 6, 3,
+            7,
+          ];
+
+          const geometry = new THREE.BufferGeometry();
+          geometry.setAttribute(
+            "position",
+            new THREE.Float32BufferAttribute(vertices, 3)
+          );
+          geometry.setIndex(edges);
+
+          const material = new THREE.LineBasicMaterial({
+            color: 0xffffff,
+            linewidth: 2,
+          });
+
+          this.hypercube = new THREE.LineSegments(geometry, material);
+          this.hypercube.position.set(0, 5, 0);
+          this.scene.add(this.hypercube);
+        }
+
+        addGifToHypercube() {
+          const textureLoader = new THREE.TextureLoader();
+          textureLoader.load("1701877242555921.gif", (texture) => {
+            const spriteMaterial = new THREE.SpriteMaterial({ map: texture });
+            this.gifSprite = new THREE.Sprite(spriteMaterial);
+            this.gifSprite.scale.set(2, 2, 1); // Adjust the scale as needed
+            this.hypercube.add(this.gifSprite);
+          });
+        }
+
+        onWindowResize() {
+          this.camera.aspect = window.innerWidth / window.innerHeight;
+          this.camera.updateProjectionMatrix();
+          this.renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        updateVisualization() {
+          if (!this.analyser) return;
+
+          this.analyser.getByteFrequencyData(this.dataArray);
+
+          this.cubes.forEach((cube, index) => {
+            const audioValue = this.dataArray[index % this.NUM_FREQUENCIES];
+            const scale = (audioValue / 128) * 10 + cube.baseHeight;
+            const clampedScale = Math.min(scale, this.MAX_HEIGHT);
+            cube.mesh.scale.y = clampedScale;
+            cube.mesh.position.y = (clampedScale * this.CUBE_SIZE) / 2;
+
+            const hue = (audioValue / 255) * 0.8 + 0.2;
+            const saturation = 0.8 + (audioValue / 255) * 0.2;
+            const lightness = 0.4 + (audioValue / 255) * 0.3;
+
+            cube.mesh.material.color.setHSL(hue, saturation, lightness);
+          });
+
+          const sizes = this.particles.geometry.attributes.size.array;
+          for (let i = 0; i < this.PARTICLE_COUNT; i++) {
+            const audioIndex = i % this.NUM_FREQUENCIES;
+            const audioValue = this.dataArray[audioIndex];
+            const scale = (audioValue / 255) * 0.2 + 0.8;
+            sizes[i] *= scale;
+          }
+          this.particles.geometry.attributes.size.needsUpdate = true;
+
+          // Update hypercube geometry and color
+          const audioValue = this.dataArray[0];
+          const scale = (audioValue / 255) * 2 + 1;
+          this.hypercube.scale.set(scale, scale, scale);
+
+          const hue = (audioValue / 255) * 0.8 + 0.2;
+          const saturation = 0.8 + (audioValue / 255) * 0.2;
+          const lightness = 0.4 + (audioValue / 255) * 0.3;
+          this.hypercube.material.color.setHSL(hue, saturation, lightness);
+
+          // Update hypercube geometry
+          const positionAttribute = this.hypercube.geometry.attributes.position;
+          for (let i = 0; i < positionAttribute.count; i++) {
+            const audioValue = this.dataArray[i % this.NUM_FREQUENCIES];
+            positionAttribute.setXYZ(
+              i,
+              positionAttribute.getX(i) +
+                (Math.random() - 0.5) * (audioValue / 255) * 0.1,
+              positionAttribute.getY(i) +
+                (Math.random() - 0.5) * (audioValue / 255) * 0.1,
+              positionAttribute.getZ(i) +
+                (Math.random() - 0.5) * (audioValue / 255) * 0.1
+            );
+          }
+          positionAttribute.needsUpdate = true;
+        }
+
+        animate() {
+          requestAnimationFrame(() => this.animate());
+
+          if (this.analyser) {
+            this.updateVisualization();
+          }
+
+          if (this.gifSprite) {
+            this.gifSprite.lookAt(this.camera.position); // Make the sprite always face the camera
+          }
+
+          this.hypercube.rotation.x += 0.01;
+          this.hypercube.rotation.y += 0.01;
+
+          this.controls.update();
+          this.renderer.render(this.scene, this.camera);
+        }
+
+        setupAudioControls() {
+          const fileInput = document.getElementById("fileInput");
+          const playBtn = document.getElementById("playBtn");
+          const volumeSlider = document.getElementById("volumeSlider");
+          const timeBar = document.getElementById("timeBar");
+          const currentTimeSpan = document.getElementById("currentTime");
+
+          let audioContext, source, audio;
+
+          const formatTime = (seconds) => {
+            const minutes = Math.floor(seconds / 60);
+            const remainingSeconds = Math.floor(seconds % 60);
+            return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
+          };
+
+          fileInput.addEventListener("change", (e) => {
+            const file = e.target.files[0];
+            const reader = new FileReader();
+
+            reader.onload = (e) => {
+              audioContext = new (window.AudioContext ||
+                window.webkitAudioContext)();
+              audio = new Audio(URL.createObjectURL(file));
+              source = audioContext.createMediaElementSource(audio);
+              this.analyser = audioContext.createAnalyser();
+              this.analyser.fftSize = 256;
+              this.dataArray = new Uint8Array(this.analyser.frequencyBinCount);
+
+              source.connect(this.analyser);
+              this.analyser.connect(audioContext.destination);
+
+              playBtn.disabled = false;
+            };
+
+            reader.readAsArrayBuffer(file);
+          });
+
+          playBtn.addEventListener("click", () => {
+            if (audio.paused) {
+              audio.play();
+              playBtn.textContent = "Pause";
+            } else {
+              audio.pause();
+              playBtn.textContent = "Play";
+            }
+          });
+
+          volumeSlider.addEventListener("input", () => {
+            if (audio) {
+              audio.volume = volumeSlider.value;
+            }
+          });
+
+          timeBar.addEventListener("input", () => {
+            if (audio) {
+              const time = (timeBar.value / 100) * audio.duration;
+              audio.currentTime = time;
+            }
+          });
+
+          const updateTimeDisplay = () => {
+            if (audio) {
+              const progress = (audio.currentTime / audio.duration) * 100;
+              timeBar.value = progress;
+              currentTimeSpan.textContent = `${formatTime(
+                audio.currentTime
+              )} / ${formatTime(audio.duration)}`;
+            }
+            requestAnimationFrame(updateTimeDisplay);
+          };
+
+          updateTimeDisplay();
+        }
+      }
+
+      new AudioVisualizer();
+    </script>
+  </body>
+</html>
